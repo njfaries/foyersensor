@@ -11,6 +11,17 @@
 // Long enough for a slow connect to finish before a new attempt.
 static const unsigned long WIFI_RETRY_MS = 30000;
 static const unsigned long WIFI_LOG_MS = 5000;
+
+// A cold start can fail to join Wi-Fi, and a second start joins. If the
+// first connect has not worked by this time, restart. Stop after a few
+// tries so a router that is off does not cause endless restarts.
+static const unsigned long FIRST_CONNECT_TIMEOUT_MS = 30000;
+static const uint8_t MAX_BOOT_RESTARTS = 3;
+
+// Survives a software restart, so the restarts can be counted.
+static const uint32_t RESTART_MAGIC = 0xF0E1D2C3;
+static RTC_NOINIT_ATTR uint32_t restartMagic;
+static RTC_NOINIT_ATTR uint8_t restartCount;
 static const int QUEUE_LENGTH = 8;
 static const uint16_t HTTP_TIMEOUT_MS = 3000;
 
@@ -166,6 +177,12 @@ void netBegin() {
   WiFi.setHostname(DEVICE_HOSTNAME);
   WiFi.setAutoReconnect(true);
   Serial.printf("Reset reason: %s\n", resetReasonText());
+
+  // Keep the count only across our own restarts.
+  if (esp_reset_reason() != ESP_RST_SW || restartMagic != RESTART_MAGIC) {
+    restartMagic = RESTART_MAGIC;
+    restartCount = 0;
+  }
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   lastWifiAttempt = millis();
 
@@ -178,9 +195,12 @@ void netBegin() {
 
 void netLoop() {
   static bool wasConnected = false;
+  static bool everConnected = false;
   bool connected = (WiFi.status() == WL_CONNECTED);
 
   if (connected && !wasConnected) {
+    everConnected = true;
+    restartCount = 0;
     Serial.print("Wi-Fi connected. IP: ");
     Serial.println(WiFi.localIP());
     char msg[96];
@@ -202,6 +222,23 @@ void netLoop() {
   if (!connected && millis() - lastWifiAttempt >= WIFI_RETRY_MS) {
     lastWifiAttempt = millis();
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  }
+
+  // Restart only before the first connect, and never during an alarm.
+  if (!everConnected && millis() >= FIRST_CONNECT_TIMEOUT_MS &&
+      restartCount < MAX_BOOT_RESTARTS) {
+    bool alarmNow;
+    portENTER_CRITICAL(&statusLock);
+    alarmNow = statusAlarm;
+    portEXIT_CRITICAL(&statusLock);
+    if (!alarmNow) {
+      restartCount++;
+      Serial.printf("No Wi-Fi after %lu s. Restart %u of %u.\n",
+                    FIRST_CONNECT_TIMEOUT_MS / 1000, restartCount,
+                    MAX_BOOT_RESTARTS);
+      delay(100);
+      ESP.restart();
+    }
   }
 
   server.handleClient();
