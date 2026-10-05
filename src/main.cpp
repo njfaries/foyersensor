@@ -33,6 +33,13 @@
     internal pull-up resistor, so the pin reads HIGH normally and
     LOW when the button is pressed.
 
+  Network:
+    Copy include/secrets.h.example to include/secrets.h and set the
+    Wi-Fi and ntfy values. On a cat alarm the ESP32 posts to the ntfy
+    topic, with a "Reset alarm" button. Network control:
+      POST http://<esp32>/reset   silence the alarm, return to watching
+      GET  http://<esp32>/status  JSON state
+
   Debug output:
     Set DEBUG_OUTPUT to true to print live sensor values over USB
     serial (115200 baud). Set it to false for normal operation.
@@ -40,6 +47,8 @@
 
 #include <Arduino.h>
 #include <HardwareSerial.h>
+
+#include "net.h"
 
 // A regular .cpp file, unlike a .ino file, does not get automatic
 // function prototypes. These forward declarations let the functions
@@ -142,6 +151,9 @@ bool buttonConfirmed = false;
 // Debug print timing
 unsigned long lastDebugTime = 0;
 
+// Network status update timing
+unsigned long lastStatusTime = 0;
+
 // ---------- TF-Luna frame reading ----------
 
 // Reads one distance value from a TF-Luna UART port, in cm.
@@ -217,6 +229,8 @@ void setup() {
   // so no external resistor is needed for the button.
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
+  netBegin();
+
   Serial.println("Cat detector starting up.");
   if (DEBUG_OUTPUT) {
     Serial.print("Debug output ON. Trigger distance: ");
@@ -258,6 +272,23 @@ void loop() {
   bool buttonRawNow = (digitalRead(BUTTON_PIN) == LOW);
   buttonConfirmed = updateDebounce(buttonRawNow, buttonRawTriggered, buttonTriggerStart);
 
+  netLoop();
+
+  // A network client asked for a reset. Stop the alarm and restart
+  // the state machine through the cooldown.
+  if (netResetRequested()) {
+    Serial.println("Network reset requested.");
+    if (state == ALARM) {
+      netNotify("Alarm reset", "Alarm reset over the network.", 2,
+                "white_check_mark", false);
+    }
+    stopAlarm();
+    state = COOLDOWN;
+    stateStartTime = now;
+  }
+
+  State prevState = state;
+
   switch (state) {
 
     case IDLE:
@@ -279,6 +310,8 @@ void loop() {
         // Window expired with no high trigger. Call this a cat.
         Serial.println("No high sensor trigger in time. Cat detected. Alarm!");
         startAlarm();
+        netNotify("Cat in the foyer", "Cat detected by the foyer sensor.", 4,
+                  "cat,rotating_light", true);
         state = ALARM;
         stateStartTime = now;
       }
@@ -288,11 +321,15 @@ void loop() {
       if (highConfirmed) {
         Serial.println("Human detected. Silencing alarm.");
         stopAlarm();
+        netNotify("Alarm cleared", "Human detected. Alarm silenced.", 2,
+                  "white_check_mark", false);
         state = COOLDOWN;
         stateStartTime = now;
       } else if (now - stateStartTime >= ALARM_TIMEOUT_MS) {
         Serial.println("Alarm timed out with no button press. Silencing alarm.");
         stopAlarm();
+        netNotify("Alarm timed out", "Alarm stopped by its time limit.", 3,
+                  "hourglass", false);
         state = COOLDOWN;
         stateStartTime = now;
       }
@@ -303,6 +340,11 @@ void loop() {
         state = IDLE;
       }
       break;
+  }
+
+  if (state != prevState || now - lastStatusTime >= 1000) {
+    lastStatusTime = now;
+    netSetStatus(stateName(state), state == ALARM);
   }
 
   if (DEBUG_OUTPUT && (now - lastDebugTime >= DEBUG_INTERVAL_MS)) {
