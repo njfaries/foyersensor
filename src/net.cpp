@@ -96,7 +96,8 @@ static void senderTask(void *) {
 }
 
 static bool authorized() {
-  if (strlen(RESET_TOKEN) == 0) return true;
+  if (strlen(RESET_TOKEN) == 0)
+    return true;
   return server.header("X-Token") == RESET_TOKEN;
 }
 
@@ -122,8 +123,9 @@ static void handleStatus() {
   portEXIT_CRITICAL(&statusLock);
 
   char json[96];
-  snprintf(json, sizeof(json), "{\"state\":\"%s\",\"alarm\":%s,\"uptime_s\":%lu}",
-           stateCopy, alarmCopy ? "true" : "false", millis() / 1000UL);
+  snprintf(json, sizeof(json),
+           "{\"state\":\"%s\",\"alarm\":%s,\"uptime_s\":%lu}", stateCopy,
+           alarmCopy ? "true" : "false", millis() / 1000UL);
   server.send(200, "application/json", json);
 }
 
@@ -132,6 +134,8 @@ void netBegin() {
   xTaskCreate(senderTask, "ntfy", 8192, nullptr, 1, nullptr);
 
   WiFi.mode(WIFI_STA);
+  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
+  WiFi.setHostname(DEVICE_HOSTNAME);
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   lastWifiAttempt = millis();
