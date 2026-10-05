@@ -146,10 +146,21 @@ static void handleStatus() {
   server.send(200, "application/json", json);
 }
 
+// Logs why the Wi-Fi link dropped or could not start.
+// Reason codes: 2 auth expired, 7 not authed, 15 or 204 handshake timeout,
+// 201 AP not found, 202 auth failed.
+static void onWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+    Serial.printf("Wi-Fi disconnect reason: %d\n",
+                  info.wifi_sta_disconnected.reason);
+  }
+}
+
 void netBegin() {
   queue = xQueueCreate(QUEUE_LENGTH, sizeof(Message));
   xTaskCreate(senderTask, "ntfy", 8192, nullptr, 1, nullptr);
 
+  WiFi.onEvent(onWifiEvent);
   WiFi.mode(WIFI_STA);
   WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
   WiFi.setHostname(DEVICE_HOSTNAME);
