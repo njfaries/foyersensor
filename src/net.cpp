@@ -4,13 +4,10 @@
 #include <HTTPClient.h>
 #include <WebServer.h>
 #include <WiFi.h>
-#include <esp_system.h>
 
 #include "secrets.h"
 
-// Long enough for a slow connect to finish before a new attempt.
-static const unsigned long WIFI_RETRY_MS = 30000;
-static const unsigned long WIFI_LOG_MS = 5000;
+static const unsigned long WIFI_RETRY_MS = 10000;
 static const int QUEUE_LENGTH = 8;
 static const uint16_t HTTP_TIMEOUT_MS = 3000;
 
@@ -26,20 +23,6 @@ static WebServer server(80);
 static QueueHandle_t queue;
 static volatile bool resetFlag = false;
 static unsigned long lastWifiAttempt = 0;
-
-static const char *resetReasonText() {
-  switch (esp_reset_reason()) {
-    case ESP_RST_POWERON:   return "power-on";
-    case ESP_RST_SW:        return "software reset";
-    case ESP_RST_PANIC:     return "crash";
-    case ESP_RST_INT_WDT:   return "interrupt watchdog";
-    case ESP_RST_TASK_WDT:  return "task watchdog";
-    case ESP_RST_WDT:       return "other watchdog";
-    case ESP_RST_BROWNOUT:  return "brownout";
-    case ESP_RST_EXT:       return "external reset";
-    default:                return "other";
-  }
-}
 
 // Shared with the main loop. Guarded by a short critical section.
 static portMUX_TYPE statusLock = portMUX_INITIALIZER_UNLOCKED;
@@ -154,7 +137,6 @@ void netBegin() {
   WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
   WiFi.setHostname(DEVICE_HOSTNAME);
   WiFi.setAutoReconnect(true);
-  Serial.printf("Reset reason: %s\n", resetReasonText());
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   lastWifiAttempt = millis();
 
@@ -172,24 +154,16 @@ void netLoop() {
   if (connected && !wasConnected) {
     Serial.print("Wi-Fi connected. IP: ");
     Serial.println(WiFi.localIP());
-    char msg[96];
-    snprintf(msg, sizeof(msg), "Connected. Reset: %s. Signal: %d dBm.",
-             resetReasonText(), WiFi.RSSI());
-    Serial.println(msg);
-    netNotify("Foyer sensor online", msg, 2, "white_check_mark", false);
+    netNotify("Foyer sensor online", "Cat detector is connected.", 2,
+              "white_check_mark", false);
   } else if (!connected && wasConnected) {
     Serial.println("Wi-Fi lost.");
   }
   wasConnected = connected;
 
-  static unsigned long lastLog = 0;
-  if (!connected && millis() - lastLog >= WIFI_LOG_MS) {
-    lastLog = millis();
-    Serial.printf("Wi-Fi not connected. Status %d\n", (int)WiFi.status());
-  }
-
   if (!connected && millis() - lastWifiAttempt >= WIFI_RETRY_MS) {
     lastWifiAttempt = millis();
+    WiFi.disconnect();
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   }
 
